@@ -163,15 +163,29 @@ podman-diagnostics cleanup 7    # Remove reports older than 7 days
 ### Cleanup
 
 ```bash
-# Clean up user resources
-podman-cleanup --user USERNAME [--remove-home]
+# Clean up specific user's resources
+./cleanup.sh --user USERNAME
 
-# Full system cleanup
-podman-cleanup --all
+# Remove home directory when cleaning up user
+./cleanup.sh --user USERNAME --remove-home
 
-# Preview cleanup actions
-podman-cleanup --dry-run --user USERNAME
+# Full system cleanup including all configured users
+./cleanup.sh --all
+
+# Preview cleanup actions (dry run)
+./cleanup.sh --dry-run --user USERNAME
+
+# Show help
+./cleanup.sh --help
 ```
+
+The cleanup script will:
+- Stop and remove user containers
+- Remove user volumes
+- Cleanup systemd services
+- Optionally remove home directory
+- Remove user from system
+- When using --all, also performs system-wide cleanup
 
 ## 💡 Troubleshooting
 

@@ -9,6 +9,8 @@ LOCAL_CERT="$HOME/certs/ZscalerRootCertificate-2048-SHA256.crt"
 REMOTE_CERT_NAME="zscaler.crt"
 MIN_MEMORY_GB=8
 MIN_PODMAN_VERSION="4.0.0"
+MAX_MEMORY="8Gi"  # Default max memory limit
+MAX_CPU="4"       # Default max CPU cores
 
 # === SYSTEM REQUIREMENTS ===
 check_requirements() {
@@ -20,6 +22,12 @@ check_requirements() {
     exit 1
   fi
 
+  # Verify PowerShell is available
+  if ! command -v powershell.exe >/dev/null 2>&1; then
+    echo "❌ PowerShell is required but not found."
+    exit 1
+  fi
+
   # Check Podman version
   local version=$(podman version --format '{{.Version}}')
   if [[ "$(printf '%s\n' "$MIN_PODMAN_VERSION" "$version" | sort -V | head -n1)" == "$version" ]]; then
@@ -27,10 +35,10 @@ check_requirements() {
     exit 1
   fi
 
-  # Check available memory
-  local mem_gb=$(free -g | awk '/^Mem:/{print $2}')
+  # Check available memory using PowerShell
+  local mem_gb=$(powershell.exe -Command "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB" | cut -d'.' -f1)
   if (( mem_gb < MIN_MEMORY_GB )); then
-    read -p "⚠️ Less than ${MIN_MEMORY_GB}GB RAM available. Performance may be impacted. Continue? (y/N) " -n 1 -r
+    read -p "⚠️ Less than ${MIN_MEMORY_GB}GB RAM available (${mem_gb}GB detected). Performance may be impacted. Continue? (y/N) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
       exit 1
@@ -51,22 +59,14 @@ fi
 
 # === OPTIMIZATION ===
 optimize_podman_machine() {
-  # Configure registry mirrors for better performance
+  # Configure registry settings
   podman machine ssh "$PODMAN_VM" "sudo tee /etc/containers/registries.conf" > /dev/null <<EOF
 unqualified-search-registries = ["docker.io"]
 short-name-mode = "permissive"
 
-[registries.search]
-registries = ${REGISTRY_MIRRORS[@]/#/\"}
-registries = ${REGISTRY_MIRRORS[@]/%/\"}
-
 [[registry]]
 prefix = "docker.io"
 location = "docker.io"
-mirror = [
-  "https://mirror.gcr.io",
-  "https://registry-1.docker.io"
-]
 
 [[registry]]
 prefix = "mcr.microsoft.com"
