@@ -6,6 +6,12 @@ This repository contains scripts to provision a Podman-managed VM (using `podman
 
 ## 📦 Files
 
+- **config.sh**  
+  Central configuration file containing all customizable settings for the provisioning process.
+
+- **common.sh**  
+  Shared utility functions for logging, error handling, and common operations.
+
 - **provision-machine.sh**  
   Host-side script. Verifies environment, optimizes VM settings, injects TLS cert, and executes the provisioning scripts inside the Podman VM.
 
@@ -14,6 +20,15 @@ This repository contains scripts to provision a Podman-managed VM (using `podman
 
 - **container-setup.sh**  
   Manages container images and configurations for MCP, AI models, and Sourcegraph tooling.
+
+- **version-tracker.sh**  
+  Tracks container versions and checks for updates.
+
+- **user-manager.sh**  
+  Manages user accounts and resource quotas.
+
+- **podman-diagnostics.sh**  
+  Provides system monitoring and diagnostic tools.
 
 ---
 
@@ -37,11 +52,11 @@ This repository contains scripts to provision a Podman-managed VM (using `podman
    cp ZscalerRootCertificate-2048-SHA256.crt ~/certs/
    ```
 
-2. (Optional) Customize the configuration:
+2. Customize the configuration (optional):
 
    ```bash
-   cp config.sh.template /tmp/config.sh
-   # Edit /tmp/config.sh to customize settings
+   cp config.sh.template config.sh
+   # Edit config.sh to customize settings
    ```
 
 3. Run the provisioning script:
@@ -65,21 +80,44 @@ This repository contains scripts to provision a Podman-managed VM (using `podman
 
 ## 🛠 Customization
 
-To provision more users:
+### User Configuration
 
-- Edit the `USERS=(...)` array in `setup-users.sh`
-- Re-run `provision-machine.sh`
+Edit the `USERS` array in `config.sh`:
 
-To modify container configurations:
+```bash
+# Define users to be created
+USERS=("user1" "user2" "user3")
+```
 
-- Edit `~/.config/mcp/config.yaml` in user's home directory
-- Adjust resource limits in container-setup.sh
+### Resource Limits
+
+Adjust resource limits in `config.sh`:
+
+```bash
+# Resource limits
+MAX_MEMORY="8Gi"
+MAX_CPU="4"
+```
+
+### Container Configuration
+
+Modify container groups in `config.sh`:
+
+```bash
+# Container groups
+declare -A CONTAINER_GROUPS
+CONTAINER_GROUPS=(
+  ["mcp"]="core-api code-intelligence ai-assistant"
+  ["base"]="mcr.microsoft.com/powershell:latest docker.io/library/python:3.9-slim"
+  ["custom"]="your-custom-image:latest"
+)
+```
 
 ---
 
 ## 🔧 Management Tools
 
-The environment comes with several management tools:
+The environment comes with several improved management tools:
 
 ### podman-user-manager
 
@@ -96,6 +134,9 @@ podman-user-manager quota USERNAME disk 20Gi   # Disk quota
 
 # Reset user environment
 podman-user-manager reset USERNAME
+
+# List all managed users
+podman-user-manager list
 ```
 
 ### podman-version-tracker
@@ -111,11 +152,17 @@ podman-version-tracker print
 
 # Scan container security
 podman-version-tracker scan CONTAINER_NAME
+
+# Track current versions
+podman-version-tracker track
+
+# Compare with previous versions
+podman-version-tracker diff
 ```
 
 ### podman-diagnostics
 
-System monitoring and diagnostics:
+Enhanced system monitoring and diagnostics:
 
 ```bash
 # Collect system diagnostics
@@ -126,30 +173,39 @@ podman-diagnostics monitor 300  # Check every 5 minutes
 
 # Clean up old reports
 podman-diagnostics cleanup 7    # Remove reports older than 7 days
+
+# Generate performance report
+podman-diagnostics report
+
+# Check system health
+podman-diagnostics health
 ```
 
 ## 📊 Monitoring & Diagnostics
 
-### Health Monitoring
+### Enhanced Health Monitoring
 
 - Automatic health checks run every 5 minutes
 - Resource usage monitoring (CPU, memory, disk)
-- Container status monitoring
+- Container status monitoring with detailed health checks
 - Automatic alert generation for issues
+- Historical performance tracking
 
-### Resource Management
+### Improved Resource Management
 
-- Per-user resource quotas
-- Automatic quota enforcement
-- Resource usage tracking
+- Per-user resource quotas with enforcement
+- Dynamic resource allocation
+- Resource usage tracking with historical data
 - Performance optimization via parallel pulls
+- Automatic cleanup of unused resources
 
 ### Security Scanning
 
-- Container security scanning
+- Container security scanning with CVE detection
 - Privilege escalation detection
 - Environment variable auditing
 - Port exposure monitoring
+- Certificate validation
 
 ## 🔄 Maintenance
 
@@ -157,35 +213,36 @@ podman-diagnostics cleanup 7    # Remove reports older than 7 days
 
 - Weekly automatic update checks
 - Update notifications for containers
-- Version tracking for reproducibility
+- Version tracking with diff capabilities
 - Registry mirror optimization
+- Automatic security patches
 
 ### Cleanup
 
 ```bash
 # Clean up specific user's resources
-./cleanup.sh --user USERNAME
+podman-cleanup --user USERNAME
 
 # Remove home directory when cleaning up user
-./cleanup.sh --user USERNAME --remove-home
+podman-cleanup --user USERNAME --remove-home
 
 # Full system cleanup including all configured users
-./cleanup.sh --all
+podman-cleanup --all
 
 # Preview cleanup actions (dry run)
-./cleanup.sh --dry-run --user USERNAME
+podman-cleanup --dry-run --user USERNAME
 
-# Show help
-./cleanup.sh --help
+# Clean up only specific resources
+podman-cleanup --user USERNAME --containers --volumes
 ```
 
-The cleanup script will:
-- Stop and remove user containers
-- Remove user volumes
-- Cleanup systemd services
-- Optionally remove home directory
-- Remove user from system
-- When using --all, also performs system-wide cleanup
+The cleanup script now includes:
+
+- Idempotent operations (safe to run multiple times)
+- Detailed logging of all actions
+- Selective cleanup options
+- Backup of important data before removal
+- Verification of cleanup success
 
 ## 💡 Troubleshooting
 
@@ -195,16 +252,19 @@ The cleanup script will:
    - Check network connectivity
    - Verify registry mirrors in /etc/containers/registries.conf
    - Review logs in /var/log/podman-provision/
+   - Use `podman-diagnostics network` to check connectivity
 
 2. Resource Limits
-   - Check quota status with podman-user-manager
+   - Check quota status with `podman-user-manager status USERNAME`
    - Review diagnostic reports
-   - Adjust limits in container-setup.sh
+   - Adjust limits in config.sh
+   - Use `podman-diagnostics resources` to check system-wide usage
 
 3. Performance Issues
    - Check parallel pull configuration
    - Verify registry mirror settings
-   - Monitor resource usage with podman-diagnostics
+   - Monitor resource usage with `podman-diagnostics monitor`
+   - Use `podman-diagnostics optimize` for suggestions
 
 ### Diagnostic Tools
 
@@ -220,15 +280,27 @@ View real-time monitoring:
 podman-diagnostics monitor
 ```
 
+Check specific subsystems:
+
+```bash
+podman-diagnostics network
+podman-diagnostics storage
+podman-diagnostics memory
+```
+
 ### Logs
 
 - Main logs: /var/log/podman-provision/
+- Per-script logs: /var/log/podman-provision/{script}-{timestamp}.log
 - Diagnostic reports: /var/log/podman-provision/reports/
 - Health monitoring: /var/log/podman-provision/health-monitor.log
+- Container logs: /var/log/podman-provision/containers/
 
-## 🔐 Notes
+## 🔐 Security Notes
 
-- The TLS certificate is injected into the VM at `/etc/pki/ca-trust/source/anchors/zscaler.crt`
+- The TLS certificate is installed system-wide at `/etc/pki/ca-trust/source/anchors/zscaler.crt`
+- All configuration files have proper permissions (600)
+- User directories have restricted permissions (700)
 - Comprehensive shell trust configuration:
   - `NODE_EXTRA_CA_CERTS` for Node.js
   - `PIP_CERT` for Python packages
@@ -236,11 +308,8 @@ podman-diagnostics monitor
   - `SSL_CERT_FILE` for OpenSSL
   - `GIT_SSL_CAINFO` for Git operations
   - `CURL_CA_BUNDLE` for curl commands
-- All yarn tooling is installed **globally** in each user's environment
-- Container volumes are persisted at `/var/lib/containers/storage/volumes`
-- VS Code is configured to use Podman as the container runtime
-- Default user password is 'changeme' (must be changed on first login)
-- Detailed logging at `/var/log/podman-provision/`
+- Default user password must be changed on first login
+- Container capabilities are restricted to minimum required
 
 ## 🖥️ VS Code Integration
 
@@ -251,9 +320,10 @@ The environment comes pre-configured for VS Code with:
 - MCP tools integration
 - Shared volume mounts for persistence
 - Resource limits for optimal performance
+- PowerShell as default terminal
 
 ---
 
 ## 🤝 Credits
 
-Built with ❤️ using Podman, NVM, Yarn, and container technologies by your infrastructure automation team.
+Built with ❤️ using Podman, NVM, Yarn, and container technologies by your infrastructure automation team

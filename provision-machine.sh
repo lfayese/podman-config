@@ -1,37 +1,40 @@
 #!/bin/bash
 set -euo pipefail
 
-# === CONFIG ===
-PODMAN_VM="podman-machine-wsl"
-TMP_SCRIPT="/tmp/setup-users.sh"
-CONTAINER_SETUP_SCRIPT="/tmp/container-setup.sh"
-LOCAL_CERT="$HOME/certs/ZscalerRootCertificate-2048-SHA256.crt"
-REMOTE_CERT_NAME="zscaler.crt"
-MIN_MEMORY_GB=8
-MIN_PODMAN_VERSION="4.0.0"
-MAX_MEMORY="8Gi"  # Default max memory limit
-MAX_CPU="4"       # Default max CPU cores
+# Load common functions and configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/config.sh"
+source "${SCRIPT_DIR}/common.sh"
+
+# Setup logging
+setup_logging
+trap 'handle_error ${LINENO}' ERR
 
 # === SYSTEM REQUIREMENTS ===
 check_requirements() {
-  echo "🔍 Checking system requirements..."
+  log "🔍 Checking system requirements..."
 
   # Check WSL2
   if ! wsl.exe -l -v | grep -q "2"; then
-    echo "❌ WSL2 is required but not enabled."
+    log "❌ WSL2 is required but not enabled."
     exit 1
   fi
 
   # Verify PowerShell is available
-  if ! command -v powershell.exe >/dev/null 2>&1; then
-    echo "❌ PowerShell is required but not found."
+  if ! command_exists powershell.exe; then
+    log "❌ PowerShell is required but not found."
     exit 1
   fi
 
   # Check Podman version
+  if ! command_exists podman; then
+    log "❌ Podman is required but not found."
+    exit 1
+  fi
+
   local version=$(podman version --format '{{.Version}}')
   if [[ "$(printf '%s\n' "$MIN_PODMAN_VERSION" "$version" | sort -V | head -n1)" == "$version" ]]; then
-    echo "❌ Podman version $MIN_PODMAN_VERSION or higher is required. Found: $version"
+    log "❌ Podman version $MIN_PODMAN_VERSION or higher is required. Found: $version"
     exit 1
   fi
 
@@ -39,7 +42,7 @@ check_requirements() {
   local mem_gb
   mem_gb=$(powershell.exe -NoProfile -Command "[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB)" || echo 0)
   if ! [[ "$mem_gb" =~ ^[0-9]+$ ]]; then
-    echo "⚠️ Could not determine system memory. Continuing anyway..."
+    log "⚠️ Could not determine system memory. Continuing anyway..."
   elif (( mem_gb < MIN_MEMORY_GB )); then
     read -p "⚠️ Less than ${MIN_MEMORY_GB}GB RAM available (${mem_gb}GB detected). Performance may be impacted. Continue? (y/N) " -n 1 -r
     echo
@@ -47,21 +50,24 @@ check_requirements() {
       exit 1
     fi
   fi
+
+  # Check if Podman machine exists
+  if ! podman machine list | grep -q "$PODMAN_VM"; then
+    log "❌ Podman machine '$PODMAN_VM' not found."
+    exit 1
+  fi
+
+  # Check if certificate exists
+  if [[ ! -f "$LOCAL_CERT" ]]; then
+    log "❌ Zscaler cert not found at: $LOCAL_CERT"
+    exit 1
+  fi
 }
-
-# === CHECKS ===
-if ! podman machine list | grep -q "$PODMAN_VM"; then
-  echo "❌ Podman machine '$PODMAN_VM' not found."
-  exit 1
-fi
-
-if [[ ! -f "$LOCAL_CERT" ]]; then
-  echo "❌ Zscaler cert not found at: $LOCAL_CERT"
-  exit 1
-fi
 
 # === OPTIMIZATION ===
 optimize_podman_machine() {
+  log "⚙️ Optimizing Podman machine configuration..."
+
   # Configure registry settings
   podman machine ssh "$PODMAN_VM" "sudo tee /etc/containers/registries.conf" > /dev/null <<EOF
 unqualified-search-registries = ["docker.io"]
@@ -98,42 +104,62 @@ max_concurrent_uploads = 3
 memory_limit = "${MAX_MEMORY}"
 cpu_quota = "${MAX_CPU}0000"
 EOF
+
+  log "✅ Podman machine optimized"
 }
 
-echo "📦 Sending cert and setup scripts to Podman VM..."
+# === COPY FILES ===
+copy_files_to_vm() {
+  log "📦 Sending cert and setup scripts to Podman VM..."
 
-# === CERT COPY ===
-podman machine ssh "$PODMAN_VM" "mkdir -p ~/certs"
-cat "$LOCAL_CERT" | podman machine ssh "$PODMAN_VM" "cat > ~/certs/$REMOTE_CERT_NAME"
+  # Create directories
+  podman machine ssh "$PODMAN_VM" "mkdir -p ~/certs"
 
-# === SCRIPT COPY ===
-# Create setup-users script
-cat > "$TMP_SCRIPT" <<'EOF'
-#!/bin/bash
-set -euo pipefail
+  # Copy certificate
+  cat "$LOCAL_CERT" | podman machine ssh "$PODMAN_VM" "cat > ~/certs/$REMOTE_CERT_NAME"
 
-# Add root certificate
-cp ~/certs/zscaler.crt /usr/local/share/ca-certificates/
-update-ca-certificates
+  # Copy configuration
+  cat "${SCRIPT_DIR}/config.sh" | podman machine ssh "$PODMAN_VM" "cat > /tmp/config.sh"
+  cat "${SCRIPT_DIR}/common.sh" | podman machine ssh "$PODMAN_VM" "cat > /tmp/common.sh"
 
-echo "✅ Root certificate installed"
-EOF
+  # Copy scripts
+  local scripts=(
+    "container-setup.sh"
+    "setup-users.sh"
+    "version-tracker.sh"
+    "cleanup.sh"
+    "user-manager.sh"
+    "podman-diagnostics.sh"
+  )
 
-# Copy setup scripts to VM
-cat "$(dirname "$0")/container-setup.sh" | podman machine ssh "$PODMAN_VM" "cat > $CONTAINER_SETUP_SCRIPT"
-cat "$(dirname "$0")/version-tracker.sh" | podman machine ssh "$PODMAN_VM" "cat > /tmp/version-tracker.sh"
-cat "$(dirname "$0")/cleanup.sh" | podman machine ssh "$PODMAN_VM" "cat > /tmp/cleanup.sh"
-cat "$(dirname "$0")/user-manager.sh" | podman machine ssh "$PODMAN_VM" "cat > /tmp/user-manager.sh"
+  for script in "${scripts[@]}"; do
+    if [[ -f "${SCRIPT_DIR}/${script}" ]]; then
+      cat "${SCRIPT_DIR}/${script}" | podman machine ssh "$PODMAN_VM" "cat > /tmp/${script}"
+      podman machine ssh "$PODMAN_VM" "chmod +x /tmp/${script}"
+    else
+      log "⚠️ Script ${script} not found in ${SCRIPT_DIR}"
+    fi
+  done
 
-# Set execute permissions
-podman machine ssh "$PODMAN_VM" "chmod +x $CONTAINER_SETUP_SCRIPT"
-podman machine ssh "$PODMAN_VM" "chmod +x /tmp/version-tracker.sh"
-podman machine ssh "$PODMAN_VM" "chmod +x /tmp/cleanup.sh"
-podman machine ssh "$PODMAN_VM" "chmod +x /tmp/user-manager.sh"
+  log "✅ Files copied to VM"
+}
 
-# === EXECUTE ===
-check_requirements
-optimize_podman_machine
-podman machine ssh "$PODMAN_VM" "chmod +x $TMP_SCRIPT && sudo bash $TMP_SCRIPT"
+# === MAIN EXECUTION ===
+main() {
+  # Run checks
+  check_requirements
 
-echo "✅ Provisioning complete!"
+  # Optimize Podman machine
+  optimize_podman_machine
+
+  # Copy files to VM
+  copy_files_to_vm
+
+  # Execute setup-users script on VM
+  log "👥 Setting up users and containers..."
+  podman machine ssh "$PODMAN_VM" "sudo bash /tmp/setup-users.sh"
+
+  log "✅ Provisioning complete!"
+}
+
+main

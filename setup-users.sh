@@ -1,58 +1,50 @@
 #!/bin/bash
 set -euo pipefail
 
-# Load configuration if available
-if [[ -f "/tmp/config.sh" ]]; then
-  source "/tmp/config.sh"
-else
-  # Default configuration
-  USERS=("ofayese" "639016")
-  CERT_VM_PATH="/etc/pki/ca-trust/source/anchors/zscaler.crt"
-  ZSCALER_HOME_CERT="$HOME/certs/zscaler.crt"
-  CONTAINER_SETUP_SCRIPT="/tmp/container-setup.sh"
-  LOG_DIR="/var/log/podman-provision"
-fi
+# Load common functions and configuration
+source "/tmp/config.sh"
+source "/tmp/common.sh"
 
 # Setup logging
-mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/setup-users-$(date +%Y%m%d-%H%M%S).log"
-exec > >(tee -a "$LOG_FILE") 2>&1
-
-log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-}
-
-handle_error() {
-  local exit_code=$?
-  local line_no=$1
-  log "Error on line $line_no: Command exited with status $exit_code"
-  exit $exit_code
-}
+setup_logging
 trap 'handle_error ${LINENO}' ERR
 
+# === User Creation ===
 create_user() {
   local username=$1
   log "👤 Creating user: $username"
-  if ! id "$username" &>/dev/null; then
-    sudo useradd -m -s /bin/bash -G wheel "$username"
+
+  # Check if user already exists
+  if user_exists "$username"; then
+    log "User $username already exists"
+  else
+    # Create user with secure defaults
+    useradd -m -s /bin/bash -G wheel "$username"
+
     # Set a default password that must be changed on first login
-    echo "${username}:changeme" | sudo chpasswd
-    sudo passwd -e "$username"
+    echo "${username}:${DEFAULT_PASSWORD}" | chpasswd
+    passwd -e "$username"
+    log "Created user $username with password expiration enabled"
   fi
 
-  sudo mkdir -p /home/$username/certs
-  sudo cp "$ZSCALER_HOME_CERT" /home/$username/certs/
-  sudo chown -R $username:$username /home/$username/certs
+  # Setup certificate directory
+  mkdir -p "/home/$username/certs"
+  cp "$ZSCALER_HOME_CERT" "/home/$username/certs/"
+  chown -R "$username:$username" "/home/$username/certs"
+  chmod 700 "/home/$username/certs"
 }
 
+# === Container Configuration ===
 create_containers_config() {
   local username=$1
   local home="/home/$username"
   local conf_dir="$home/.config/containers"
 
   log "⚙️ Setting up containers config for $username"
-  sudo mkdir -p "$conf_dir"
-  sudo tee "$conf_dir/containers.conf" > /dev/null <<CONF
+  mkdir -p "$conf_dir"
+
+  # Create containers.conf with secure defaults
+  cat > "$conf_dir/containers.conf" <<CONF
 [engine]
 cgroup_manager = "systemd"
 events_logger = "journald"
@@ -69,7 +61,8 @@ default_capabilities = [
 ]
 CONF
 
-  sudo tee "$conf_dir/registries.conf" > /dev/null <<CONF2
+  # Create registries.conf with secure defaults
+  cat > "$conf_dir/registries.conf" <<CONF2
 unqualified-search-registries = ["docker.io"]
 short-name-mode = "permissive"
 
@@ -83,9 +76,13 @@ registries = []
 registries = []
 CONF2
 
-  sudo chown -R $username:$username "$conf_dir"
+  # Set proper permissions
+  chown -R "$username:$username" "$conf_dir"
+  chmod 700 "$conf_dir"
+  chmod 600 "$conf_dir"/*.conf
 }
 
+# === Shell Trust Configuration ===
 apply_shell_trust() {
   local username=$1
   local home="/home/$username"
@@ -95,11 +92,11 @@ apply_shell_trust() {
 
   # Backup existing bashrc if it exists
   if [[ -f "$bashrc" ]]; then
-    sudo cp "$bashrc" "${bashrc}.bak"
+    cp "$bashrc" "${bashrc}.bak.$(date +%Y%m%d)"
   fi
 
   # Add environment variables for TLS trust
-  cat <<EOF | sudo tee -a "$bashrc" > /dev/null
+  cat <<EOF | tee -a "$bashrc" > /dev/null
 # TLS Certificate Trust
 export NODE_EXTRA_CA_CERTS=$CERT_VM_PATH
 export PIP_CERT=$CERT_VM_PATH
@@ -122,9 +119,12 @@ export DOCKER_HOST="unix:///run/user/\$(id -u)/podman/podman.sock"
 export PATH="\$HOME/.local/bin:\$HOME/.yarn/bin:\$PATH"
 EOF
 
-  sudo chown $username:$username "$bashrc"
+  # Set proper permissions
+  chown "$username:$username" "$bashrc"
+  chmod 644 "$bashrc"
 }
 
+# === Node.js and Yarn Setup ===
 setup_node_yarn() {
   local username=$1
   local home="/home/$username"
@@ -132,38 +132,47 @@ setup_node_yarn() {
 
   log "🟢 Installing Node & Yarn for $username"
 
-  if ! sudo -u "$username" bash -c "
+  # Check if already installed
+  if [[ -d "$nvm_dir" ]] && sudo -u "$username" bash -c "source $nvm_dir/nvm.sh && command -v node && command -v yarn" &>/dev/null; then
+    log "Node.js and Yarn already installed for $username"
+    return 0
+  fi
+
+  # Install with retry and fallback
+  if ! retry_operation "sudo -u '$username' bash -c '
     export NVM_DIR=\"$nvm_dir\"
     mkdir -p \$NVM_DIR
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
     source \$NVM_DIR/nvm.sh
     nvm install --lts
     nvm use --lts
-    nvm alias default 'lts/*'
+    nvm alias default \"lts/*\"
     corepack enable
     corepack prepare yarn@1.22.19 --activate
-  "; then
+  '" "installing Node.js and Yarn"; then
     log "⚠️ Error installing Node/Yarn. Retrying with system Node..."
-    sudo dnf install -y nodejs npm
-    sudo npm install -g yarn@1.22.19
+    dnf install -y nodejs npm
+    npm install -g yarn@1.22.19
   fi
 }
 
+# === PowerShell Setup ===
 setup_powershell() {
   local username=$1
   log "💻 Setting up PowerShell for $username"
 
   # Install PowerShell if not present
-  if ! command -v pwsh &>/dev/null; then
-    sudo dnf install -y powershell
+  if ! command_exists pwsh; then
+    log "Installing PowerShell..."
+    retry_operation "dnf install -y powershell" "installing PowerShell"
   fi
 
   # Create PowerShell profile directory
   local profile_dir="/home/$username/.config/powershell"
-  sudo mkdir -p "$profile_dir"
+  mkdir -p "$profile_dir"
 
   # Create PowerShell profile
-  cat <<EOF | sudo tee "$profile_dir/Microsoft.PowerShell_profile.ps1" > /dev/null
+  cat <<EOF > "$profile_dir/Microsoft.PowerShell_profile.ps1"
 # Certificate trust configuration
 \$env:NODE_EXTRA_CA_CERTS = "$CERT_VM_PATH"
 \$env:REQUESTS_CA_BUNDLE = "$CERT_VM_PATH"
@@ -176,9 +185,13 @@ Set-Alias -Name docker -Value podman
 Set-Alias -Name docker-compose -Value podman-compose
 EOF
 
-  sudo chown -R $username:$username "$profile_dir"
+  # Set proper permissions
+  chown -R "$username:$username" "$profile_dir"
+  chmod 700 "$profile_dir"
+  chmod 600 "$profile_dir/Microsoft.PowerShell_profile.ps1"
 }
 
+# === Podman Socket Setup ===
 setup_podman_socket() {
   local username=$1
   log "🔌 Setting up Podman socket for $username"
@@ -186,10 +199,10 @@ setup_podman_socket() {
   # Create systemd user directories
   local systemd_dir="/home/$username/.config/systemd/user"
   local socket_dir="$systemd_dir/podman.socket.d"
-  sudo mkdir -p "$socket_dir"
+  mkdir -p "$socket_dir"
 
   # Create podman socket service override
-  cat <<EOF | sudo tee "$socket_dir/override.conf" > /dev/null
+  cat <<EOF > "$socket_dir/override.conf"
 [Socket]
 SocketMode=0660
 SocketUser=$username
@@ -197,49 +210,96 @@ ListenStream=%t/podman/podman.sock
 EOF
 
   # Set proper permissions
-  sudo chown -R $username:$username "$systemd_dir"
+  chown -R "$username:$username" "$systemd_dir"
+  chmod 700 "$systemd_dir"
+  chmod 600 "$socket_dir/override.conf"
 
   # Enable and start the socket
-  sudo -u "$username" XDG_RUNTIME_DIR="/run/user/$(id -u $username)" systemctl --user enable --now podman.socket
+  local uid=$(id -u "$username")
+  XDG_RUNTIME_DIR="/run/user/$uid" sudo -u "$username" systemctl --user daemon-reload
+  XDG_RUNTIME_DIR="/run/user/$uid" sudo -u "$username" systemctl --user enable --now podman.socket
+
+  # Verify socket is running
+  if ! XDG_RUNTIME_DIR="/run/user/$uid" sudo -u "$username" systemctl --user is-active podman.socket; then
+    log "⚠️ Warning: podman.socket not active for $username"
+  fi
 
   # Enable user linger for systemd services to persist
-  sudo loginctl enable-linger "$username"
+  loginctl enable-linger "$username"
 }
 
+# === Management Tools Installation ===
 install_management_tools() {
   local username=$1
   log "🛠️ Installing management tools for $username"
 
   # Create bin directories
-  sudo mkdir -p /usr/local/bin
-  sudo mkdir -p "/home/$username/.local/bin"
+  mkdir -p /usr/local/bin
+  mkdir -p "/home/$username/.local/bin"
 
   # Copy management scripts
-  sudo cp /tmp/cleanup.sh /usr/local/bin/podman-cleanup
-  sudo cp /tmp/user-manager.sh /usr/local/bin/podman-user-manager
-  sudo cp /tmp/version-tracker.sh /usr/local/bin/podman-version-tracker
-  sudo cp /tmp/podman-diagnostics.sh /usr/local/bin/podman-diagnostics
+  for tool in cleanup.sh user-manager.sh version-tracker.sh podman-diagnostics.sh; do
+    if [[ -f "/tmp/$tool" ]]; then
+      cp "/tmp/$tool" "/usr/local/bin/podman-${tool%.sh}"
+      chmod +x "/usr/local/bin/podman-${tool%.sh}"
 
-  # Set permissions
-  sudo chmod +x /usr/local/bin/podman-*
+      # Make tools available to user
+      cp "/usr/local/bin/podman-${tool%.sh}" "/home/$username/.local/bin/"
+    else
+      log "⚠️ Tool script /tmp/$tool not found"
+    fi
+  done
 
-  # Make tools available to user
-  sudo cp /usr/local/bin/podman-* "/home/$username/.local/bin/"
-  sudo chown -R "$username:$username" "/home/$username/.local/bin"
+  # Set proper permissions
+  chown -R "$username:$username" "/home/$username/.local/bin"
+  chmod 755 "/home/$username/.local/bin/podman-"*
 
-  # Setup initial diagnostics
+  # Setup initial diagnostics for first user only
   if [[ "$username" == "${USERS[0]}" ]]; then
-    # Only set up monitoring for the first user to avoid duplicates
-    sudo -u "$username" bash -c "podman-diagnostics monitor 300 &>> /var/log/podman-provision/health-monitor.log &"
+    log "Setting up health monitoring for $username"
+    sudo -u "$username" bash -c "/home/$username/.local/bin/podman-diagnostics monitor 300 &>> $LOG_DIR/health-monitor.log &"
   fi
 
   # Setup automatic update checks (weekly)
-  (crontab -l 2>/dev/null; echo "0 0 * * 0 /home/$username/.local/bin/podman-version-tracker check-updates") | crontab -
+  local cron_job="0 0 * * 0 /home/$username/.local/bin/podman-version-tracker check-updates"
+  (sudo -u "$username" crontab -l 2>/dev/null | grep -v "podman-version-tracker"; echo "$cron_job") | sudo -u "$username" crontab -
 }
 
+# === Certificate Installation ===
+install_cert_to_ca() {
+  log "🔒 Installing root certificate to system CA store"
+
+  # Check if cert already installed
+  if [[ -f "$CERT_VM_PATH" ]]; then
+    log "Certificate already installed at $CERT_VM_PATH"
+  else
+    # Copy cert to CA store
+    mkdir -p "$(dirname "$CERT_VM_PATH")"
+    cp "$ZSCALER_HOME_CERT" "$CERT_VM_PATH"
+    chmod 644 "$CERT_VM_PATH"
+
+    # Update CA certificates
+    if command_exists update-ca-certificates; then
+      update-ca-certificates
+    elif command_exists update-ca-trust; then
+      update-ca-trust
+    else
+      log "⚠️ Could not update CA certificates - command not found"
+    fi
+  fi
+}
+
+# === Main Execution ===
 main() {
+  log "Starting user provisioning process"
+
+  # Install certificate to system CA store
   install_cert_to_ca
+
+  # Process each user
   for user in "${USERS[@]}"; do
+    log "Processing user: $user"
+
     create_user "$user"
     create_containers_config "$user"
     apply_shell_trust "$user"
@@ -249,12 +309,14 @@ main() {
     install_management_tools "$user"
 
     # Track versions before container setup
-    sudo -u "$user" podman-version-tracker track
+    sudo -u "$user" "/home/$user/.local/bin/podman-version-tracker" track
 
     # Run container setup
-    if [[ -f "$CONTAINER_SETUP_SCRIPT" ]]; then
+    if [[ -f "/tmp/container-setup.sh" ]]; then
       log "🐋 Setting up containers for $user..."
-      sudo -u "$user" bash "$CONTAINER_SETUP_SCRIPT" "$user"
+      sudo -u "$user" bash "/tmp/container-setup.sh" "$user"
+    else
+      log "⚠️ Container setup script not found at /tmp/container-setup.sh"
     fi
   done
 

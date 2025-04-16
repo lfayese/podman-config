@@ -1,27 +1,23 @@
 #!/bin/bash
 set -euo pipefail
 
-# Load shared configuration
-if [[ -f "/tmp/config.sh" ]]; then
-  source "/tmp/config.sh"
-fi
+# Load common functions and configuration
+source "/tmp/config.sh"
+source "/tmp/common.sh"
+
+# Setup logging
+setup_logging
+trap 'handle_error ${LINENO}' ERR
 
 VOLUME_ROOT="/var/lib/containers/storage/volumes"
-LOG_FILE="/var/log/container-setup.log"
 
-# === Helper Functions ===
-MAX_RETRIES=3
-RETRY_DELAY=5
-
-log() {
-  local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-  echo "$msg" | tee -a "$LOG_FILE"
-}
-
+# === Container Health Check ===
 check_container_health() {
   local container=$1
-  local image_id=$(podman inspect --format '{{.Id}}' "$container" 2>/dev/null)
+  log "Checking health of container: $container"
 
+  # Check if container exists
+  local image_id=$(podman inspect --format '{{.Id}}' "$container" 2>/dev/null)
   if [[ -z "$image_id" ]]; then
     log "❌ Failed health check: $container not found"
     return 1
@@ -43,25 +39,7 @@ check_container_health() {
   return 0
 }
 
-retry_operation() {
-  local operation=$1
-  local description=$2
-  local attempt=1
-
-  while ((attempt <= MAX_RETRIES)); do
-    if $operation; then
-      return 0
-    fi
-
-    log "⚠️ Attempt $attempt of $MAX_RETRIES for $description failed. Retrying in ${RETRY_DELAY}s..."
-    sleep $RETRY_DELAY
-    ((attempt++))
-  done
-
-  log "❌ All attempts failed for $description"
-  return 1
-}
-
+# === Volume Setup ===
 setup_volumes() {
   local username=$1
   local volumes=(
@@ -73,10 +51,19 @@ setup_volumes() {
 
   log "Setting up volumes for $username"
   for vol in "${volumes[@]}"; do
-    podman volume create "${username}-${vol}" || log "Warning: Volume ${username}-${vol} may already exist"
+    local volume_name="${username}-${vol}"
+
+    # Check if volume exists
+    if podman volume inspect "$volume_name" &>/dev/null; then
+      log "Volume $volume_name already exists"
+    else
+      podman volume create "$volume_name"
+      log "Created volume: $volume_name"
+    fi
   done
 }
 
+# === Container Pulling ===
 pull_containers() {
   local group=$1
   local containers=$2
@@ -84,6 +71,7 @@ pull_containers() {
   log "Pulling containers for group: $group"
 
   for container in $containers; do
+    # Prefix MCP containers if needed
     if [[ "$group" == "mcp" && "$container" != *"/"* ]]; then
       container="mcp/$container"
     fi
@@ -101,12 +89,16 @@ pull_containers() {
   done
 }
 
+# === VS Code Configuration ===
 configure_vscode() {
   local username=$1
   local home="/home/$username"
   local settings_dir="$home/.config/Code/User"
 
+  log "Configuring VS Code for $username"
   mkdir -p "$settings_dir"
+
+  # Create settings.json with proper permissions
   cat > "$settings_dir/settings.json" <<EOF
 {
   "remote.containers.defaultExtensions": [
@@ -130,14 +122,22 @@ configure_vscode() {
   }
 }
 EOF
+
+  # Set proper permissions
+  chown -R "$username:$username" "$settings_dir"
+  chmod 600 "$settings_dir/settings.json"
 }
 
+# === MCP Configuration ===
 setup_mcp_config() {
   local username=$1
   local home="/home/$username"
   local mcp_dir="$home/.config/mcp"
 
+  log "Setting up MCP configuration for $username"
   mkdir -p "$mcp_dir"
+
+  # Create config.yaml with proper permissions
   cat > "$mcp_dir/config.yaml" <<EOF
 version: '1'
 storage:
@@ -158,23 +158,43 @@ services:
   enabled:
 $(for service in "${MCP_ENABLED_SERVICES[@]}"; do echo "    - $service"; done)
 EOF
+
+  # Set proper permissions
+  chown -R "$username:$username" "$mcp_dir"
+  chmod 600 "$mcp_dir/config.yaml"
 }
 
+# === Podman Compose Installation ===
 install_podman_compose() {
   local username=$1
   log "Installing podman-compose for $username"
 
-  sudo -u "$username" python3 -m pip install --user podman-compose
+  # Check if already installed
+  if sudo -u "$username" python3 -m pip list | grep -q "podman-compose"; then
+    log "podman-compose already installed for $username"
+    return 0
+  fi
+
+  # Install with retry
+  retry_operation "sudo -u '$username' python3 -m pip install --user podman-compose" "installing podman-compose"
 }
 
 # === Main Logic ===
 main() {
+  if [[ $# -ne 1 ]]; then
+    log "Usage: $0 <username>"
+    exit 1
+  fi
+
   local username=$1
 
-  log "Starting container setup for user: $username"
+  # Verify user exists
+  if ! user_exists "$username"; then
+    log "❌ User $username does not exist"
+    exit 1
+  }
 
-  # Create necessary directories
-  mkdir -p "$(dirname "$LOG_FILE")"
+  log "Starting container setup for user: $username"
 
   # Setup volumes
   setup_volumes "$username"
@@ -189,11 +209,9 @@ main() {
   done
 
   # Configure VS Code integration
-  log "Configuring VS Code integration"
   configure_vscode "$username"
 
   # Setup MCP configuration
-  log "Setting up MCP configuration"
   setup_mcp_config "$username"
 
   log "Container setup completed for $username"
@@ -201,9 +219,5 @@ main() {
 
 # Allow script to be sourced without executing main
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 <username>"
-    exit 1
-  fi
-  main "$1"
+  main "$@"
 fi
