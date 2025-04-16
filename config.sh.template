@@ -1,0 +1,67 @@
+# Configuration for podman-config setup
+# Copy this file to /tmp/config.sh and modify as needed
+
+# Users to provision
+USERS=("ofayese" "639016")
+
+# Certificate paths
+CERT_VM_PATH="/etc/pki/ca-trust/source/anchors/zscaler.crt"
+ZSCALER_HOME_CERT="$HOME/certs/zscaler.crt"
+
+# Scripts and logging
+CONTAINER_SETUP_SCRIPT="/tmp/container-setup.sh"
+LOG_DIR="/var/log/podman-provision"
+
+# Resource limits (used by container-setup.sh)
+MAX_MEMORY="8Gi"
+MAX_CPU="4"
+MIN_MEMORY_GB=8
+MIN_PODMAN_VERSION="4.0.0"
+
+# Volume configuration
+declare -A VOLUMES=(
+  ["mcp"]="mcp-data"
+  ["ai"]="ai-models"
+  ["sourcegraph"]="sourcegraph-data"
+  ["powershell"]="powershell-modules"
+)
+
+# Container registry configuration
+REGISTRY_MIRRORS=(
+  "docker.io"
+  "quay.io"
+  "registry.fedoraproject.org"
+  "mcr.microsoft.com"
+)
+
+# Container groups configuration
+declare -A CONTAINER_GROUPS=(
+  ["mcp"]="mcp/everything mcp/fetch mcp/filesystem mcp/git mcp/github mcp/gitlab mcp/memory mcp/postgres mcp/puppeteer mcp/sequentialthinking mcp/sentry mcp/sqlite mcp/time mcp/gdrive"
+  ["ai"]="ai/llama3.2:latest ai/mistral:latest localai/localai ollama/ollama"
+  ["sourcegraph"]="sourcegraph/sourcegraph-toolbox sourcegraph/cody-gateway sourcegraph/executor-vm sourcegraph/indexed-searcher sourcegraph/grafana sourcegraph/initcontainer sourcegraph/jaeger-all-in-one sourcegraph/node-exporter sourcegraph/opentelemetry-collector sourcegraph/redis-cache sourcegraph/search-indexer"
+  ["powershell"]="mcr.microsoft.com/powershell:preview-7.6-ubuntu-24.04 mcr.microsoft.com/powershell/test-deps:debian-12"
+)
+
+# Default enabled MCP services
+MCP_ENABLED_SERVICES=(
+  "everything"
+  "fetch"
+  "filesystem"
+  "git"
+  "github"
+  "gitlab"
+  "memory"
+  "postgres"
+  "puppeteer"
+  "sequentialthinking"
+  "sentry"
+  "sqlite"
+  "time"
+  "gdrive"
+)
+
+# PowerShell configuration
+POWERSHELL_PACKAGES=(
+  "Microsoft.PowerShell.UnixCompleters"
+  "PSReadLine"
+)
