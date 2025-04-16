@@ -36,8 +36,11 @@ check_requirements() {
   fi
 
   # Check available memory using PowerShell
-  local mem_gb=$(powershell.exe -Command "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB" | cut -d'.' -f1)
-  if (( mem_gb < MIN_MEMORY_GB )); then
+  local mem_gb
+  mem_gb=$(powershell.exe -NoProfile -Command "[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB)" || echo 0)
+  if ! [[ "$mem_gb" =~ ^[0-9]+$ ]]; then
+    echo "⚠️ Could not determine system memory. Continuing anyway..."
+  elif (( mem_gb < MIN_MEMORY_GB )); then
     read -p "⚠️ Less than ${MIN_MEMORY_GB}GB RAM available (${mem_gb}GB detected). Performance may be impacted. Continue? (y/N) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -104,6 +107,18 @@ podman machine ssh "$PODMAN_VM" "mkdir -p ~/certs"
 cat "$LOCAL_CERT" | podman machine ssh "$PODMAN_VM" "cat > ~/certs/$REMOTE_CERT_NAME"
 
 # === SCRIPT COPY ===
+# Create setup-users script
+cat > "$TMP_SCRIPT" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+# Add root certificate
+cp ~/certs/zscaler.crt /usr/local/share/ca-certificates/
+update-ca-certificates
+
+echo "✅ Root certificate installed"
+EOF
+
 # Copy setup scripts to VM
 cat "$(dirname "$0")/container-setup.sh" | podman machine ssh "$PODMAN_VM" "cat > $CONTAINER_SETUP_SCRIPT"
 cat "$(dirname "$0")/version-tracker.sh" | podman machine ssh "$PODMAN_VM" "cat > /tmp/version-tracker.sh"
