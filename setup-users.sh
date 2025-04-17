@@ -289,6 +289,42 @@ install_cert_to_ca() {
   fi
 }
 
+# === Security Hardening ===
+harden_user_environment() {
+  local username=$1
+  local home="/home/$username"
+
+  log "🔒 Applying security hardening for $username"
+
+  # Set secure umask
+  echo "umask 027" >> "$home/.bashrc"
+
+  # Configure container seccomp profile
+  local seccomp_dir="$home/.config/containers/seccomp"
+  mkdir -p "$seccomp_dir"
+  cat > "$seccomp_dir/default.json" <<EOF
+{
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "architectures": ["SCMP_ARCH_X86_64"],
+  "syscalls": [
+    // ... minimal required syscalls ...
+  ]
+}
+EOF
+
+  # Set secure limits
+  cat >> "/etc/security/limits.d/${username}.conf" <<EOF
+$username soft nproc 2048
+$username hard nproc 4096
+$username soft nofile 4096
+$username hard nofile 8192
+EOF
+
+  # Set proper permissions
+  chown -R "$username:$username" "$seccomp_dir"
+  chmod 700 "$seccomp_dir"
+}
+
 # === Main Execution ===
 main() {
   log "Starting user provisioning process"

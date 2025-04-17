@@ -69,7 +69,7 @@ optimize_podman_machine() {
   log "⚙️ Optimizing Podman machine configuration..."
 
   # Configure registry settings
-  podman machine ssh "$PODMAN_VM" "sudo tee /etc/containers/registries.conf" > /dev/null <<EOF
+  sudo podman machine ssh "$PODMAN_VM" "sudo tee /etc/containers/registries.conf" > /dev/null <<EOF
 unqualified-search-registries = ["docker.io"]
 short-name-mode = "permissive"
 
@@ -88,7 +88,7 @@ max_concurrent_downloads = 3
 EOF
 
   # Optimize podman settings
-  podman machine ssh "$PODMAN_VM" "sudo tee -a /etc/containers/containers.conf" > /dev/null <<EOF
+  sudo podman machine ssh "$PODMAN_VM" "sudo tee -a /etc/containers/containers.conf" > /dev/null <<EOF
 [engine]
 cgroup_manager = "systemd"
 events_logger = "journald"
@@ -113,14 +113,14 @@ copy_files_to_vm() {
   log "📦 Sending cert and setup scripts to Podman VM..."
 
   # Create directories
-  podman machine ssh "$PODMAN_VM" "mkdir -p ~/certs"
+  sudo podman machine ssh "$PODMAN_VM" "mkdir -p ~/certs"
 
   # Copy certificate
-  cat "$LOCAL_CERT" | podman machine ssh "$PODMAN_VM" "cat > ~/certs/$REMOTE_CERT_NAME"
+  cat "$LOCAL_CERT" | sudo podman machine ssh "$PODMAN_VM" "cat > ~/certs/$REMOTE_CERT_NAME"
 
   # Copy configuration
-  cat "${SCRIPT_DIR}/config.sh" | podman machine ssh "$PODMAN_VM" "cat > /tmp/config.sh"
-  cat "${SCRIPT_DIR}/common.sh" | podman machine ssh "$PODMAN_VM" "cat > /tmp/common.sh"
+  cat "${SCRIPT_DIR}/config.sh" | sudo podman machine ssh "$PODMAN_VM" "sudo tee /tmp/config.sh" > /dev/null
+  cat "${SCRIPT_DIR}/common.sh" | sudo podman machine ssh "$PODMAN_VM" "sudo tee /tmp/common.sh" > /dev/null
 
   # Copy scripts
   local scripts=(
@@ -134,8 +134,8 @@ copy_files_to_vm() {
 
   for script in "${scripts[@]}"; do
     if [[ -f "${SCRIPT_DIR}/${script}" ]]; then
-      cat "${SCRIPT_DIR}/${script}" | podman machine ssh "$PODMAN_VM" "cat > /tmp/${script}"
-      podman machine ssh "$PODMAN_VM" "chmod +x /tmp/${script}"
+      cat "${SCRIPT_DIR}/${script}" | sudo podman machine ssh "$PODMAN_VM" "sudo tee /tmp/${script}" > /dev/null
+      sudo podman machine ssh "$PODMAN_VM" "sudo chmod +x /tmp/${script}"
     else
       log "⚠️ Script ${script} not found in ${SCRIPT_DIR}"
     fi

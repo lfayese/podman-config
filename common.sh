@@ -11,7 +11,9 @@ setup_logging() {
   local script_name=$(basename "$0" .sh)
   local log_file="${LOG_DIR:-/var/log/podman-provision}/${script_name}-$(date +%Y%m%d-%H%M%S).log"
 
-  mkdir -p "$(dirname "$log_file")"
+  sudo mkdir -p "$(dirname "$log_file")"
+  sudo touch "$log_file"
+  sudo chown $USER:$USER "$log_file"
   exec > >(tee -a "$log_file") 2>&1
 
   log "Starting $script_name"
@@ -28,9 +30,35 @@ handle_error() {
   local line_no=$1
   log "Error on line $line_no: Command exited with status $exit_code"
 
-  # Perform any necessary cleanup here
+  # Cleanup running processes
+  jobs -p | xargs -r kill
+
+  # Reset terminal
+  stty sane 2>/dev/null || true
+
+  # Restore file descriptors
+  exec 1>&- 2>&-
+  exec 1>/dev/tty 2>/dev/tty
 
   exit $exit_code
+}
+
+# Verify required environment variables
+verify_env() {
+  local vars=("$@")
+  local missing=()
+
+  for var in "${vars[@]}"; do
+    if [[ -z "${!var:-}" ]]; then
+      missing+=("$var")
+    fi
+  done
+
+  if (( ${#missing[@]} > 0 )); then
+    log "❌ Missing required environment variables: ${missing[*]}"
+    return 1
+  fi
+  return 0
 }
 
 # Retry function
@@ -73,4 +101,4 @@ run_as_user() {
 }
 
 # Export all functions
-export -f log handle_error retry_operation command_exists user_exists run_as_user
+export -f log handle_error verify_env retry_operation command_exists user_exists run_as_user

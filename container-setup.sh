@@ -57,7 +57,8 @@ setup_volumes() {
     if podman volume inspect "$volume_name" &>/dev/null; then
       log "Volume $volume_name already exists"
     else
-      podman volume create "$volume_name"
+      sudo podman volume create "$volume_name"
+      sudo chown -R "$username:$username" "$VOLUME_ROOT/$volume_name"
       log "Created volume: $volume_name"
     fi
   done
@@ -179,6 +180,39 @@ install_podman_compose() {
   retry_operation "sudo -u '$username' python3 -m pip install --user podman-compose" "installing podman-compose"
 }
 
+# === Network Setup ===
+setup_networks() {
+  local username=$1
+  log "Setting up container networks for $username"
+
+  local networks=(
+    "${username}-backend"
+    "${username}-frontend"
+  )
+
+  for net in "${networks[@]}"; do
+    if ! podman network exists "$net" 2>/dev/null; then
+      podman network create "$net"
+      log "Created network: $net"
+    fi
+  done
+}
+
+check_dependencies() {
+  local container=$1
+  local deps=$(podman inspect "$container" --format '{{.Config.Labels.dependencies}}' 2>/dev/null)
+
+  if [[ -n "$deps" ]]; then
+    log "Checking dependencies for $container: $deps"
+    for dep in ${deps//,/ }; do
+      if ! podman image exists "$dep"; then
+        log "Missing dependency: $dep for $container"
+        pull_containers "dependency" "$dep"
+      fi
+    done
+  fi
+}
+
 # === Main Logic ===
 main() {
   if [[ $# -ne 1 ]]; then
@@ -192,7 +226,7 @@ main() {
   if ! user_exists "$username"; then
     log "❌ User $username does not exist"
     exit 1
-  }
+  fi
 
   log "Starting container setup for user: $username"
 
@@ -202,10 +236,18 @@ main() {
   # Install podman-compose
   install_podman_compose "$username"
 
+  # Setup networks
+  setup_networks "$username"
+
   # Pull container images by group
   for group in "${!CONTAINER_GROUPS[@]}"; do
     log "Processing $group containers..."
     pull_containers "$group" "${CONTAINER_GROUPS[$group]}"
+    
+    # Check dependencies for each container
+    for container in ${CONTAINER_GROUPS[$group]}; do
+      check_dependencies "$container"
+    done
   done
 
   # Configure VS Code integration
