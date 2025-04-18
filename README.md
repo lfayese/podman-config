@@ -1,6 +1,6 @@
 # 🐳 Podman VM Provisioning: Multi-User Dev Environment
 
-This repository contains scripts to provision a Podman-managed VM (using `podman-machine-wsl`) with secure TLS trust, developer toolchains, Node.js environments, and container-based development tools for users.
+This repository contains scripts to provision a Podman-managed VM (using `podman-machine-default`) with secure TLS trust, developer toolchains, Node.js environments, and container-based development tools for users.
 
 ---
 
@@ -61,7 +61,7 @@ This repository contains scripts to provision a Podman-managed VM (using `podman
 
 - Windows 10/11 with WSL2 enabled
 - Podman 4.0.0+ installed with WSL support
-- Podman machine already created: `podman-machine-wsl`
+- Podman machine already created: `podman-machine-default`
 - Minimum 8GB RAM recommended
 - Zscaler cert available at: `~/certs/ZscalerRootCertificate-2048-SHA256.crt`
 
@@ -78,7 +78,7 @@ This repository contains scripts to provision a Podman-managed VM (using `podman
    # Verify Podman installation
    podman --version   # Should be 4.0.0+
    
-   # Ensure podman-machine-wsl exists
+   # Ensure podman-machine-default exists
    podman machine ls
    ```
 

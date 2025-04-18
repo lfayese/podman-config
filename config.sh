@@ -12,7 +12,7 @@ MAX_MEMORY="8Gi"
 MAX_CPU="4"
 
 # Paths
-PODMAN_VM="podman-machine-wsl"
+PODMAN_VM="podman-machine-default"
 LOG_DIR="/var/log/podman-provision"
 CERT_VM_PATH="/etc/pki/ca-trust/source/anchors/zscaler.crt"
 LOCAL_CERT="$HOME/certs/ZscalerRootCertificate-2048-SHA256.crt"
