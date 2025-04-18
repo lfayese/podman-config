@@ -69,24 +69,34 @@ This repository contains scripts to provision a Podman-managed VM (using `podman
 
 ## 🚀 Quick Start
 
-1. Place Zscaler certificate:
+1. Verify Prerequisites:
+
+   ```bash
+   # Check WSL2 is enabled
+   wsl --status
+   
+   # Verify Podman installation
+   podman --version   # Should be 4.0.0+
+   
+   # Ensure podman-machine-wsl exists
+   podman machine ls
+   ```
 
    ```bash
    mkdir -p ~/certs
    cp ZscalerRootCertificate-2048-SHA256.crt ~/certs/
+   cp ZscalerRootCertificate-2048-SHA256.crt ~/certs/
    ```
-
-2. Configure users and settings:
 
    ```bash
    cp config.sh.template config.sh
    # Edit config.sh as needed
+   # Edit config.sh as needed
    ```
-
-3. Run provisioning:
 
    ```bash
    chmod +x provision-machine.sh
+   ./provision-machine.sh
    ./provision-machine.sh
    ```
 
